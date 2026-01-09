@@ -25,4 +25,9 @@ SECTIONS {
     . = ALIGN(4);
     . += 128 * 1024; /* 128KB */
     __stack_top = .;
+
+    . = ALIGN(4096);
+    __free_ram = .; /* __free_ram과 __free_ram_end는 스택 공간 다음에 위치하는 메모리 영역 */
+    . += 64 * 1024 * 1024; /* 64MB */
+    __free_ram_end = .; /* __free_ram과 __free_ram_end는 스택 공간 다음에 위치하는 메모리 영역 */
 }

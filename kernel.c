@@ -3,6 +3,24 @@
 
 // 링커 스크립트에 정의한 심볼(__bss, __bss_end, __stack_top)을 extern char __bss[], ...;형태로 선언
 extern char __bss[], __bss_end[], __stack_top[];
+// 페이지 크기 정의
+extern char __free_ram[], __free_ram_end[];
+
+paddr_t alloc_pages(uint32_t n) {
+    // next_paddr은 static 변수로 선언되었기 때문에, 로컬 변수와 달리 함수 호출이 끝나도 값을 계속 유지합니다(글로벌 변수처럼 동작).
+    // next_paddr는 “새로 할당할 메모리 영역의 시작 주소"
+    // next_paddr의 초깃값은 __free_ram 주소입니다. 즉, 메모리는 __free_ram 이후부터 순차적으로 할당
+    // 이 알고리즘은 아주 단순하지만, 반환(메모리 해제) 이 불가능하다는 문제
+    static paddr_t next_paddr = (paddr_t) __free_ram;
+    paddr_t paddr = next_paddr;
+    next_paddr += n * PAGE_SIZE;
+
+    if (next_paddr > (paddr_t) __free_ram_end)
+        PANIC("out of memory");
+
+    memset((void *) paddr, 0, n * PAGE_SIZE);
+    return paddr;
+}
 
 struct sbiret sbi_call(long arg0, long arg1, long arg2, long arg3, long arg4,
                        long arg5, long fid, long eid) {
@@ -123,6 +141,11 @@ void handle_trap(struct trap_frame *f) {
 
 void kernel_main(void) {    
     memset(__bss, 0, (size_t) __bss_end - (size_t) __bss);
+
+    paddr_t paddr0 = alloc_pages(2);
+    paddr_t paddr1 = alloc_pages(1);
+    printf("alloc_pages test: paddr0=%x\n", paddr0);
+    printf("alloc_pages test: paddr1=%x\n", paddr1);
 
     WRITE_CSR(stvec, (uint32_t) kernel_entry); // new
 
