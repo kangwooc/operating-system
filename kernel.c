@@ -1,10 +1,6 @@
 #include "kernel.h"
 #include "common.h"
 
-typedef unsigned char uint8_t; // 8-bit unsigned integer 기존 자료형(int, float, struct 등)에 새로운 별칭(alias)을 붙여주는 키워드
-typedef unsigned int uint32_t; // 32-bit unsigned integer
-typedef uint32_t size_t; // Size type
-
 // 링커 스크립트에 정의한 심볼(__bss, __bss_end, __stack_top)을 extern char __bss[], ...;형태로 선언
 extern char __bss[], __bss_end[], __stack_top[];
 
@@ -33,17 +29,106 @@ void putchar(char ch) {
     sbi_call(ch, 0, 0, 0, 0, 0, 0, 1 /* Console Putchar */);
 }
 
-void kernel_main(void) {
-    // printf("\n\nHello %s\n", "World!");
-    // printf("1 + 2 = %d, %x\n", 1 + 2, 0x1234abcd);
+// 커널 진입점(entry point) 함수
+// 이 함수는 어셈블리어로 작성되어 있으며, 트랩이 발생했을 때 호출됩니다.
+// sscratch 레지스터를 임시 저장소로 이용해 예외 발생 시점의 스택 포인터를 저장해두고, 나중에 복구합니다.
+// 커널에서는 부동소수점(FPU) 레지스터를 사용하지 않으므로(일반적으로 쓰레드 스위칭 시에만 저장/복원), 여기서는 저장하지 않았습니다.
+// 스택 포인터(sp) 값을 a0 레지스터에 넘겨 handle_trap 함수를 C 코드로 호출합니다. 이때 sp가 가리키는 곳에는 조금 뒤에 소개할 trap_frame 구조체와 동일한 형태로 레지스터들이 저장되어 있습니다.
+// __attribute__((aligned(4)))는 함수 시작 주소를 4바이트 경계에 맞추기 위함입니다. stvec 레지스터는 예외 핸들러 주소뿐 아니라 하위 2비트를 모드 정보 플래그로 사용하기 때문에, 핸들러 주소가 4바이트 정렬이 되어 있어야 합니다.
+__attribute__((naked))
+__attribute__((aligned(4)))
+void kernel_entry(void) {
+    __asm__ __volatile__(
+        "csrw sscratch, sp\n"
+        "addi sp, sp, -4 * 31\n"
+        "sw ra,  4 * 0(sp)\n"
+        "sw gp,  4 * 1(sp)\n"
+        "sw tp,  4 * 2(sp)\n"
+        "sw t0,  4 * 3(sp)\n"
+        "sw t1,  4 * 4(sp)\n"
+        "sw t2,  4 * 5(sp)\n"
+        "sw t3,  4 * 6(sp)\n"
+        "sw t4,  4 * 7(sp)\n"
+        "sw t5,  4 * 8(sp)\n"
+        "sw t6,  4 * 9(sp)\n"
+        "sw a0,  4 * 10(sp)\n"
+        "sw a1,  4 * 11(sp)\n"
+        "sw a2,  4 * 12(sp)\n"
+        "sw a3,  4 * 13(sp)\n"
+        "sw a4,  4 * 14(sp)\n"
+        "sw a5,  4 * 15(sp)\n"
+        "sw a6,  4 * 16(sp)\n"
+        "sw a7,  4 * 17(sp)\n"
+        "sw s0,  4 * 18(sp)\n"
+        "sw s1,  4 * 19(sp)\n"
+        "sw s2,  4 * 20(sp)\n"
+        "sw s3,  4 * 21(sp)\n"
+        "sw s4,  4 * 22(sp)\n"
+        "sw s5,  4 * 23(sp)\n"
+        "sw s6,  4 * 24(sp)\n"
+        "sw s7,  4 * 25(sp)\n"
+        "sw s8,  4 * 26(sp)\n"
+        "sw s9,  4 * 27(sp)\n"
+        "sw s10, 4 * 28(sp)\n"
+        "sw s11, 4 * 29(sp)\n"
 
-    // for (;;) {
-    //     __asm__ __volatile__("wfi");
-    // }
+        "csrr a0, sscratch\n"
+        "sw a0, 4 * 30(sp)\n"
+
+        "mv a0, sp\n"
+        "call handle_trap\n"
+
+        "lw ra,  4 * 0(sp)\n"
+        "lw gp,  4 * 1(sp)\n"
+        "lw tp,  4 * 2(sp)\n"
+        "lw t0,  4 * 3(sp)\n"
+        "lw t1,  4 * 4(sp)\n"
+        "lw t2,  4 * 5(sp)\n"
+        "lw t3,  4 * 6(sp)\n"
+        "lw t4,  4 * 7(sp)\n"
+        "lw t5,  4 * 8(sp)\n"
+        "lw t6,  4 * 9(sp)\n"
+        "lw a0,  4 * 10(sp)\n"
+        "lw a1,  4 * 11(sp)\n"
+        "lw a2,  4 * 12(sp)\n"
+        "lw a3,  4 * 13(sp)\n"
+        "lw a4,  4 * 14(sp)\n"
+        "lw a5,  4 * 15(sp)\n"
+        "lw a6,  4 * 16(sp)\n"
+        "lw a7,  4 * 17(sp)\n"
+        "lw s0,  4 * 18(sp)\n"
+        "lw s1,  4 * 19(sp)\n"
+        "lw s2,  4 * 20(sp)\n"
+        "lw s3,  4 * 21(sp)\n"
+        "lw s4,  4 * 22(sp)\n"
+        "lw s5,  4 * 23(sp)\n"
+        "lw s6,  4 * 24(sp)\n"
+        "lw s7,  4 * 25(sp)\n"
+        "lw s8,  4 * 26(sp)\n"
+        "lw s9,  4 * 27(sp)\n"
+        "lw s10, 4 * 28(sp)\n"
+        "lw s11, 4 * 29(sp)\n"
+        "lw sp,  4 * 30(sp)\n"
+        "sret\n"
+    );
+}
+
+void handle_trap(struct trap_frame *f) {
+    uint32_t scause = READ_CSR(scause);
+    uint32_t stval = READ_CSR(stval);
+    uint32_t user_pc = READ_CSR(sepc);
+
+    PANIC("unexpected trap scause=%x, stval=%x, sepc=%x\n", scause, stval, user_pc);
+}
+
+void kernel_main(void) {    
     memset(__bss, 0, (size_t) __bss_end - (size_t) __bss);
-    
-    PANIC("booted!");
-    printf("unreachable here!\n");
+
+    WRITE_CSR(stvec, (uint32_t) kernel_entry); // new
+
+    // stvec를 설정한 뒤, unimp 명령어(illegal instruction 로 간주됨)를 실행해 일부러 예외를 일으키는 코드입니다.
+    // unimp 는 “의사(pseudo) 명령어”.
+    __asm__ __volatile__("unimp"); // new
 }
 
 // __attribute__는 함수나 변수에 특별한 속성을 부여하는 GCC 컴파일러의 확장 기능입니다.
