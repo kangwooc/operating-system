@@ -7,10 +7,16 @@ QEMU=qemu-system-riscv32 # QEMU 실행 파일 지정
 CC=/opt/homebrew/opt/llvm/bin/clang  
 CFLAGS="-std=c11 -O2 -g3 -Wall -Wextra --target=riscv32-unknown-elf -fuse-ld=lld -fno-stack-protector -ffreestanding -nostdlib"
 
+OBJCOPY=/opt/homebrew/opt/llvm/bin/llvm-objcopy
+
+# Build the shell (application)
+$CC $CFLAGS -Wl,-Tuser.ld -Wl,-Map=shell.map -o shell.elf shell.c user.c common.c
+$OBJCOPY --set-section-flags .bss=alloc,contents -O binary shell.elf shell.bin
+$OBJCOPY -Ibinary -Oelf32-littleriscv shell.bin shell.bin.o
+
 # 커널 빌드
 $CC $CFLAGS -Wl,-Tkernel.ld -Wl,-Map=kernel.map -o kernel.elf \
-    kernel.c common.c
+    kernel.c common.c shell.bin.o
 
 # QEMU 실행, RISC-V 32비트 가상 머신 생성, 기본 BIOS 사용, 그래픽 출력 비활성화, 시리얼 출력을 표준 입출력으로 설정, 재부팅 방지
 $QEMU -machine virt -bios default -nographic -serial mon:stdio --no-reboot -kernel kernel.elf
-
