@@ -11,13 +11,7 @@ extern char __free_ram[], __free_ram_end[];
 #define PROC_UNUSED   0   // 사용되지 않는 프로세스 구조체
 #define PROC_RUNNABLE 1   // 실행 가능한(runnable) 프로세스
 
-struct process {
-    int pid;             // 프로세스 ID
-    int state;           // 프로세스 상태: PROC_UNUSED 또는 PROC_RUNNABLE
-    vaddr_t sp;          // 스택 포인터
-    uint8_t stack[8192]; // 커널 스택
-};
-
+extern char __kernel_base[];
 
 __attribute__((naked)) void switch_context(uint32_t *prev_sp,
                                            uint32_t *next_sp) {
@@ -63,6 +57,43 @@ __attribute__((naked)) void switch_context(uint32_t *prev_sp,
 
 struct process procs[PROCS_MAX]; // 모든 프로세스 제어 구조체 배열
 
+paddr_t alloc_pages(uint32_t n) {
+    // next_paddr은 static 변수로 선언되었기 때문에, 로컬 변수와 달리 함수 호출이 끝나도 값을 계속 유지합니다(글로벌 변수처럼 동작).
+    // next_paddr는 “새로 할당할 메모리 영역의 시작 주소"
+    // next_paddr의 초깃값은 __free_ram 주소입니다. 즉, 메모리는 __free_ram 이후부터 순차적으로 할당
+    // 이 알고리즘은 아주 단순하지만, 반환(메모리 해제) 이 불가능하다는 문제
+    static paddr_t next_paddr = (paddr_t) __free_ram;
+    paddr_t paddr = next_paddr;
+    next_paddr += n * PAGE_SIZE;
+
+    if (next_paddr > (paddr_t) __free_ram_end)
+        PANIC("out of memory");
+
+    memset((void *) paddr, 0, n * PAGE_SIZE);
+    return paddr;
+}
+
+void map_page(uint32_t *table1, uint32_t vaddr, paddr_t paddr, uint32_t flags) {
+    if (!is_aligned(vaddr, PAGE_SIZE))
+        PANIC("unaligned vaddr %x", vaddr);
+
+    if (!is_aligned(paddr, PAGE_SIZE))
+        PANIC("unaligned paddr %x", paddr);
+
+    uint32_t vpn1 = (vaddr >> 22) & 0x3ff;
+    if ((table1[vpn1] & PAGE_V) == 0) {
+        // 1단계 페이지 테이블 엔트리가 존재하지 않으면 2단계 페이지 테이블을 생성합니다.
+        uint32_t pt_paddr = alloc_pages(1);
+        // paddr를 PAGE_SIZE로 나누는 이유는 엔트리에 물리 주소 자체가 아니라 "물리 페이지 번호(physical page number)"를 저장해야 하기 때문
+        table1[vpn1] = ((pt_paddr / PAGE_SIZE) << 10) | PAGE_V;
+    }
+
+    // Set the 2nd level page table entry to map the physical page.
+    uint32_t vpn0 = (vaddr >> 12) & 0x3ff;
+    uint32_t *table0 = (uint32_t *) ((table1[vpn1] >> 10) * PAGE_SIZE);
+    table0[vpn0] = ((paddr / PAGE_SIZE) << 10) | flags | PAGE_V;
+}
+
 struct process *create_process(uint32_t pc) {
     // 미사용(UNUSED) 상태의 프로세스 구조체 찾기
     struct process *proc = NULL;
@@ -94,9 +125,16 @@ struct process *create_process(uint32_t pc) {
     *--sp = 0;                      // s0
     *--sp = (uint32_t) pc;          // ra (처음 실행 시 점프할 주소)
 
+    // Map kernel pages.
+    uint32_t *page_table = (uint32_t *) alloc_pages(1);
+    for (paddr_t paddr = (paddr_t) __kernel_base; paddr < (paddr_t) __free_ram_end; paddr += PAGE_SIZE)
+        map_page(page_table, paddr, paddr, PAGE_R | PAGE_W | PAGE_X);
+
+    
     // 구조체 필드 초기화
     proc->pid = i + 1;
     proc->state = PROC_RUNNABLE;
+    proc->page_table = page_table;
     proc->sp = (uint32_t) sp;
     return proc;
 }
@@ -121,31 +159,18 @@ void yield(void) {
 
     // 스위칭 시 sscratch에 커널 스택 초기값을 설정 합니다. 아래와 같이 스케줄러(yield)에서 프로세스 전환 직전에 sscratch 레지스터를 적절히 설정
     __asm__ __volatile__(
+        "sfence.vma\n"
+        "csrw satp, %[satp]\n"
+        "sfence.vma\n"
         "csrw sscratch, %[sscratch]\n"
         :
-        : [sscratch] "r" ((uint32_t) &next->stack[sizeof(next->stack)])
+        : [satp] "r" (SATP_SV32 | ((uint32_t) next->page_table / PAGE_SIZE)), [sscratch] "r" ((uint32_t) &next->stack[sizeof(next->stack)])
     );
 
     // 컨텍스트 스위칭
     struct process *prev = current_proc;
     current_proc = next;
     switch_context(&prev->sp, &next->sp);
-}
-
-paddr_t alloc_pages(uint32_t n) {
-    // next_paddr은 static 변수로 선언되었기 때문에, 로컬 변수와 달리 함수 호출이 끝나도 값을 계속 유지합니다(글로벌 변수처럼 동작).
-    // next_paddr는 “새로 할당할 메모리 영역의 시작 주소"
-    // next_paddr의 초깃값은 __free_ram 주소입니다. 즉, 메모리는 __free_ram 이후부터 순차적으로 할당
-    // 이 알고리즘은 아주 단순하지만, 반환(메모리 해제) 이 불가능하다는 문제
-    static paddr_t next_paddr = (paddr_t) __free_ram;
-    paddr_t paddr = next_paddr;
-    next_paddr += n * PAGE_SIZE;
-
-    if (next_paddr > (paddr_t) __free_ram_end)
-        PANIC("out of memory");
-
-    memset((void *) paddr, 0, n * PAGE_SIZE);
-    return paddr;
 }
 
 struct sbiret sbi_call(long arg0, long arg1, long arg2, long arg3, long arg4,
