@@ -19,4 +19,10 @@ $CC $CFLAGS -Wl,-Tkernel.ld -Wl,-Map=kernel.map -o kernel.elf \
     kernel.c common.c shell.bin.o
 
 # QEMU 실행, RISC-V 32비트 가상 머신 생성, 기본 BIOS 사용, 그래픽 출력 비활성화, 시리얼 출력을 표준 입출력으로 설정, 재부팅 방지
-$QEMU -machine virt -bios default -nographic -serial mon:stdio --no-reboot -kernel kernel.elf
+# new -drive id=drive0: drive0이라는 이름의 디스크를 정의
+# new drive0 디스크를 사용하는 virtio-blk 장치를 추가
+$QEMU -machine virt -bios default -nographic -serial mon:stdio --no-reboot \
+    -d unimp,guest_errors,int,cpu_reset -D qemu.log \
+    -drive id=drive0,file=lorem.txt,format=raw,if=none \           
+    -device virtio-blk-device,drive=drive0,bus=virtio-mmio-bus.0 \
+    -kernel kernel.elf
